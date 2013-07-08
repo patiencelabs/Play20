@@ -130,7 +130,15 @@ object PlayBuild extends Build {
               ProblemFilters.exclude[MissingTypesProblem]("play.core.DynamicPart$"),
               ProblemFilters.exclude[IncompatibleMethTypeProblem]("play.core.DynamicPart.apply"),
               ProblemFilters.exclude[MissingMethodProblem]("play.core.DynamicPart.toString"),
-              ProblemFilters.exclude[MissingMethodProblem]("play.core.DynamicPart.copy")
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.DynamicPart.copy"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.j.JavaAction.method"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.j.JavaAction.parser"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.j.JavaAction.controller"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.j.JavaAction.annotations"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.server.netty.RequestBodyHandler.newRequestBodyHandler"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.server.netty.RequestBodyHandler.newRequestBodyUpstreamHandler"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.server.netty.PlayDefaultUpstreamHandler.play$core$server$netty$PlayDefaultUpstreamHandler$$bodyEnumerator$1"),
+              ProblemFilters.exclude[MissingMethodProblem]("play.core.server.netty.PlayDefaultUpstreamHandler.newRequestBodyHandler")
             ),
             sourceGenerators in Compile <+= (dependencyClasspath in TemplatesCompilerProject in Runtime, packageBin in TemplatesCompilerProject in Compile, scalaSource in Compile, sourceManaged in Compile, streams) map ScalaTemplates
         )
@@ -248,6 +256,20 @@ object PlayBuild extends Build {
         )
     ).settings(com.typesafe.sbtscalariform.ScalariformPlugin.defaultScalariformSettings: _*).dependsOn(PlayProject)
 
+    // This project is just for testing Play, not really a public artifact
+    lazy val PlayIntegrationTestProject = Project(
+      "Play-Integration-Test",
+      file("src/play-integration-test"),
+      settings = buildSettingsWithMIMA ++ Seq(
+        libraryDependencies := runtime,
+        publishTo := Some(playRepository),
+        scalacOptions ++= Seq("-encoding", "UTF-8", "-Xlint","-deprecation", "-unchecked", "-feature"),
+        javacOptions ++= Seq("-source","1.6","-target","1.6", "-encoding", "UTF-8"),
+        javacOptions in doc := Seq("-source", "1.6")
+      )
+    ).settings(com.typesafe.sbtscalariform.ScalariformPlugin.defaultScalariformSettings: _*)
+      .dependsOn(PlayProject, PlayTestProject)
+
     lazy val SbtPluginProject = Project(
         "SBT-Plugin",
         file("src/sbt-plugin"),
@@ -332,7 +354,8 @@ object PlayBuild extends Build {
         ConsoleProject,
         PlayTestProject,
         PlayExceptionsProject,
-        PlayFiltersHelpersProject
+        PlayFiltersHelpersProject,
+        PlayIntegrationTestProject
     )
 
     object BuildSettings {
@@ -462,6 +485,8 @@ object PlayBuild extends Build {
 
         val runtime = Seq(
             "io.netty"                          %    "netty"                    %   "3.6.3.Final",
+
+            "com.typesafe.netty"                %    "netty-http-pipelining"    %   "1.0.0",
 
             "org.slf4j"                         %    "slf4j-api"                %   "1.6.6",
             "org.slf4j"                         %    "jul-to-slf4j"             %   "1.6.6",
@@ -615,6 +640,12 @@ object PlayBuild extends Build {
         val generateAPIDocs = TaskKey[Unit]("api-docs")
         val generateAPIDocsTask = TaskKey[Unit]("api-docs") <<= (dependencyClasspath in Test, compilers, streams, baseDirectory, scalaBinaryVersion) map { (classpath, cs, s, base, sbv) =>
 
+          val branch = if (BuildSettings.buildVersion.endsWith("-SNAPSHOT")) {
+            System.getProperty("git.branch", "master")
+          } else {
+            BuildSettings.buildVersion
+          }
+
           val allJars = (file("src") ** "*.jar").get
 
           IO.delete(file("../documentation/api"))
@@ -629,8 +660,9 @@ object PlayBuild extends Build {
             (file("src/play-filters-helpers/src/main/scala") ** "*.scala").get ++
             (file("src/play-jdbc/src/main/scala") ** "*.scala").get ++
             (file("src/play/target/scala-" + sbv + "/src_managed/main/views/html/helper") ** "*.scala").get
-          val options = Seq("-sourcepath", base.getAbsolutePath, "-doc-source-url", "https://github.com/playframework/Play20/tree/" + BuildSettings.buildVersion + "/framework€{FILE_PATH}.scala")
-          new Scaladoc(10, cs.scalac)("Play " + BuildSettings.buildVersion + " Scala API", sourceFiles, classpath.map(_.data) ++ allJars, file("../documentation/api/scala"), options , s.log)
+          val options = Seq("-sourcepath", base.getAbsolutePath, "-doc-source-url", "https://github.com/playframework/Play20/tree/" + branch + "/framework€{FILE_PATH}.scala")
+          new Scaladoc(10, cs.scalac)("Play " + BuildSettings.buildVersion + " Scala API", sourceFiles, classpath.map(_.data) ++ allJars,
+          file("../documentation/api/scala"), options , s.log)
 
           // Javadoc
           val javaSources = Seq(
@@ -643,7 +675,7 @@ object PlayBuild extends Build {
           ).mkString(":")
           val javaApiTarget = file("../documentation/api/java")
           val javaClasspath = classpath.map(_.data).mkString(":")
-          """javadoc -windowtitle playframework -doctitle Play&nbsp;""" + BuildSettings.buildVersion + """&nbsp;Java&nbsp;API  -sourcepath %s -d %s -subpackages play -exclude play.api:play.core -classpath %s""".format(javaSources, javaApiTarget, javaClasspath) ! s.log
+          """javadoc -notimestamp -windowtitle playframework -doctitle Play&nbsp;""" + BuildSettings.buildVersion + """&nbsp;Java&nbsp;API  -sourcepath %s -d %s -subpackages play -exclude play.api:play.core -classpath %s""".format(javaSources, javaApiTarget, javaClasspath) ! s.log
 
         }
 

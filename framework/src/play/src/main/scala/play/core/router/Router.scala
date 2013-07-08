@@ -9,6 +9,8 @@ import scala.util.parsing.combinator._
 import scala.util.matching._
 import java.net.URI
 import scala.util.control.Exception
+import scala.collection.concurrent.TrieMap
+import play.core.j.JavaActionAnnotations
 
 trait PathPart
 
@@ -23,7 +25,6 @@ object DynamicPart {
   def apply(name: String, constraint: String) = new DynamicPart(name, constraint)
 }
 
-
 case class StaticPart(value: String) extends PathPart {
   override def toString = """StaticPart("""" + value + """")"""
 }
@@ -34,12 +35,13 @@ case class PathPattern(parts: Seq[PathPart]) {
 
   private def decodeIfEncoded(decode: Boolean, groupCount: Int): Matcher => Either[Throwable, String] = matcher =>
     Exception.allCatch[String].either {
-      if(decode)
-         new URI(matcher.group(groupCount)).getPath
-      else
+      if (decode) {
+        val group = matcher.group(groupCount)
+        // If param is not correctly encoded, get path will return null, so we prepend a / to it
+        new URI("/" + group).getPath.drop(1)
+      } else
         matcher.group(groupCount)
     }
-
 
   lazy val (regex, groups) = {
     Some(parts.foldLeft("", Map.empty[String, Matcher => Either[Throwable, String]], 0) { (s, e) =>
@@ -55,7 +57,6 @@ case class PathPattern(parts: Seq[PathPart]) {
       case (r, g, _) => Pattern.compile("^" + r + "$") -> g
     }.get
   }
-
 
   def apply(path: String): Option[Map[String, Either[Throwable, String]]] = {
     val matcher = regex.matcher(path)
@@ -85,8 +86,11 @@ case class PathPattern(parts: Seq[PathPart]) {
  * provides Play's router implementation
  */
 object Router {
-  
-   object Route {
+
+  // Cache of annotation information for improving Java performance.
+  private val javaActionAnnotations = new TrieMap[HandlerDef, JavaActionAnnotations]
+
+  object Route {
 
     trait ParamsExtractor {
       def unapply(request: RequestHeader): Option[RouteParams]
@@ -159,13 +163,19 @@ object Router {
     }
 
     implicit def wrapJava: HandlerInvoker[play.mvc.Result] = new HandlerInvoker[play.mvc.Result] {
-      def call(call: => play.mvc.Result, handler: HandlerDef) = {
-        new play.core.j.JavaAction {
+      def call(call: => play.mvc.Result, handlerDef: HandlerDef) = {
+        new {
+          val annotations = javaActionAnnotations.getOrElseUpdate(handlerDef, {
+            val controller = handlerDef.ref.getClass.getClassLoader.loadClass(handlerDef.controller)
+            val method = MethodUtils.getMatchingAccessibleMethod(controller, handlerDef.method, handlerDef.parameterTypes: _*)
+            new JavaActionAnnotations(controller, method)
+          })
+        } with play.core.j.JavaAction {
+          val parser = annotations.parser
           def invocation = call
-          lazy val controller = handler.ref.getClass.getClassLoader.loadClass(handler.controller)
-          lazy val method = MethodUtils.getMatchingAccessibleMethod(controller, handler.method, handler.parameterTypes: _*)
         }
       }
+
     }
 
     implicit def javaBytesWebSocket: HandlerInvoker[play.mvc.WebSocket[Array[Byte]]] = new HandlerInvoker[play.mvc.WebSocket[Array[Byte]]] {
@@ -343,17 +353,22 @@ object Router {
       d.call(call, handler) match {
         case javaAction: play.core.j.JavaAction => new play.core.j.JavaAction with RequestTaggingHandler {
           def invocation = javaAction.invocation
-          def controller = javaAction.controller
-          def method = javaAction.method
+
+          val annotations = javaAction.annotations
+          val parser = javaAction.annotations.parser
+
           def tagRequest(rh: RequestHeader) = doTagRequest(rh, handler)
         }
+
         case action: EssentialAction => new EssentialAction with RequestTaggingHandler {
           def apply(rh: RequestHeader) = action(rh)
           def tagRequest(rh: RequestHeader) = doTagRequest(rh, handler)
         }
+
         case ws @ WebSocket(f) => {
           WebSocket[ws.FRAMES_TYPE](rh => f(doTagRequest(rh, handler)))(ws.frameFormatter)
         }
+
         case handler => handler
       }
     }
