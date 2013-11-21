@@ -1,7 +1,7 @@
 #! /usr/bin/env sh
 
 if [ -z "${PLAY_VERSION}" ]; then
-  PLAY_VERSION="2.1-SNAPSHOT"
+  PLAY_VERSION="2.1.5"
 fi
 
 if [ -z "${JPDA_PORT}" ]; then
